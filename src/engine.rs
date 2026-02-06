@@ -9,6 +9,9 @@ use std::time::{Duration, Instant};
 use crate::book::Book;
 use crate::evaluation::{eval, MATE_EVAL};
 
+/// Maximum number of entries in the transposition table to cap memory usage.
+const MAX_TT_ENTRIES: usize = 1_000_000;
+
 /// Transposition table entry
 #[derive(Clone)]
 struct TTEntry {
@@ -173,13 +176,15 @@ fn minimax(
     // Terminal position reached, call static evaluation function
     if node.children.is_empty() {
         node.eval = eval(&board_after_move);
-        transposition_table.insert(
-            key,
-            TTEntry {
-                depth,
-                eval: node.eval,
-            },
-        );
+        if transposition_table.len() < MAX_TT_ENTRIES {
+            transposition_table.insert(
+                key,
+                TTEntry {
+                    depth,
+                    eval: node.eval,
+                },
+            );
+        }
     } else {
         // Recurse
         let white_to_move = board_after_move.side_to_move() == Color::White;
@@ -221,13 +226,15 @@ fn minimax(
         }
 
         // Store in transposition table
-        transposition_table.insert(
-            key,
-            TTEntry {
-                depth,
-                eval: node.eval,
-            },
-        );
+        if transposition_table.len() < MAX_TT_ENTRIES {
+            transposition_table.insert(
+                key,
+                TTEntry {
+                    depth,
+                    eval: node.eval,
+                },
+            );
+        }
 
         // Order child moves for next iteration
         order_moves(node, white_to_move);

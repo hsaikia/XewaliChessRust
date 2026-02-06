@@ -8,17 +8,15 @@ engine:
 
 challenge:
   concurrency: 1
-  accept_bot: true
+  accept_bot: false
   only_bot: false
-  max_base: 600
-  min_base: 30
+  max_base: 900
+  min_base: 600
   max_increment: 30
-  min_increment: 0
+  min_increment: 10
   variants:
     - standard
   time_controls:
-    - bullet
-    - blitz
     - rapid
   modes:
     - casual

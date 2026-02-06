@@ -1,6 +1,13 @@
 services:
   lichess-bot:
-    build: .
+    image: ghcr.io/hsaikia/xewalichessrust:latest
     container_name: xewali-bot
     restart: unless-stopped
     env_file: .env
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "1.0"
+        reservations:
+          memory: 128M

@@ -21,7 +21,11 @@ This guide covers deploying the Xewali chess engine as a 24/7 Lichess bot using 
 >   -H "Authorization: Bearer YOUR_TOKEN"
 > ```
 
-## 2. Clone and Configure
+## 2. Deploy on VPS
+
+The Docker image is built automatically by GitHub Actions on every push to `main` and published to GHCR. No compilation happens on the VPS.
+
+Clone the repo and configure:
 
 ```bash
 git clone https://github.com/hsaikia/XewaliChessRust.git
@@ -35,10 +39,11 @@ Edit `.env` and paste your token:
 LICHESS_BOT_TOKEN=lip_xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-## 3. Build and Run
+Pull and run:
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 Verify the bot is connected:
@@ -49,6 +54,15 @@ docker compose logs -f
 
 You should see output indicating the bot has connected to Lichess and is waiting for challenges.
 
+## 3. Updating
+
+After pushing changes to `main`, GitHub Actions will build and push a new image. On your VPS:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
 ## 4. Managing the Bot
 
 | Action | Command |
@@ -57,9 +71,9 @@ You should see output indicating the bot has connected to Lichess and is waiting
 | Stop | `docker compose down` |
 | View live logs | `docker compose logs -f` |
 | Restart | `docker compose restart` |
-| Rebuild after code changes | `docker compose up -d --build` |
+| Update to latest image | `docker compose pull && docker compose up -d` |
 
-The `restart: unless-stopped` policy in `docker-compose.yml` ensures the bot automatically restarts after crashes or VPS reboots.
+The `restart: unless-stopped` policy ensures the bot automatically restarts after crashes or VPS reboots. The container is limited to 256MB RAM and 1 CPU core.
 
 ## Configuration
 
@@ -68,16 +82,18 @@ Edit `config.yml` to adjust bot behavior. Key settings:
 | Setting | Default | Description |
 |---|---|---|
 | `challenge.concurrency` | `1` | Number of simultaneous games |
-| `challenge.time_controls` | bullet, blitz, rapid | Accepted time controls |
+| `challenge.time_controls` | blitz, rapid | Accepted time controls |
 | `challenge.modes` | casual, rated | Accepted game modes |
-| `challenge.accept_bot` | `true` | Accept challenges from other bots |
-| `challenge.min_base` | `30` | Minimum initial time (seconds) |
-| `challenge.max_base` | `600` | Maximum initial time (seconds) |
+| `challenge.accept_bot` | `false` | Accept challenges from other bots |
+| `challenge.min_base` | `600` | Minimum initial time (seconds) |
+| `challenge.max_base` | `10800` | Maximum initial time (seconds) |
 
-After editing `config.yml`, rebuild and restart:
+After editing `config.yml`, push to `main` and redeploy:
 
 ```bash
-docker compose up -d --build
+git push
+# Wait for GitHub Actions to finish, then on VPS:
+docker compose pull && docker compose up -d
 ```
 
 See the [lichess-bot configuration docs](https://github.com/lichess-bot-devs/lichess-bot/wiki/Configure-lichess-bot) for the full list of options.

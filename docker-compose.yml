@@ -1,0 +1,6 @@
+services:
+  lichess-bot:
+    build: .
+    container_name: xewali-bot
+    restart: unless-stopped
+    env_file: .env

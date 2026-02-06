@@ -1,0 +1,24 @@
+token: "__LICHESS_BOT_TOKEN__"
+
+engine:
+  dir: "./engines"
+  name: "xewali_engine"
+  protocol: "uci"
+
+challenge:
+  concurrency: 1
+  accept_bot: true
+  only_bot: false
+  max_base: 600
+  min_base: 30
+  max_increment: 30
+  min_increment: 0
+  variants:
+    - standard
+  time_controls:
+    - bullet
+    - blitz
+    - rapid
+  modes:
+    - casual
+    - rated

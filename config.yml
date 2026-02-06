@@ -1,4 +1,5 @@
 token: "__LICHESS_BOT_TOKEN__"
+url: "https://lichess.org/"
 
 engine:
   dir: "./engines"

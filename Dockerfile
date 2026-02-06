@@ -17,6 +17,11 @@ RUN git clone --depth 1 https://github.com/lichess-bot-devs/lichess-bot.git /app
 
 RUN mkdir -p engines
 COPY --from=builder /build/target/release/xewali_engine engines/
+RUN chmod +x engines/xewali_engine
+
+# Smoke test: verify engine responds to UCI
+RUN echo "uci" | engines/xewali_engine | head -1 | grep -q "id name"
+
 COPY config.yml config.yml
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

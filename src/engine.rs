@@ -267,8 +267,9 @@ pub fn play_move(board: &Board, book: &Book, time_to_move: f64) -> (String, f64)
     let mut best_move = String::new();
     let mut best_eval = 0.0;
 
+    let mut transposition_table = HashMap::new();
+
     for depth in 1.. {
-        let mut transposition_table = HashMap::new();
         let mut transpositions = 0;
 
         minimax(
@@ -299,6 +300,11 @@ pub fn play_move(board: &Board, book: &Book, time_to_move: f64) -> (String, f64)
         // Check time
         if start.elapsed() > time_limit {
             break;
+        }
+
+        // Clear subtrees to free memory, keep root's direct children for move ordering
+        for child in &mut root.children {
+            child.children.clear();
         }
     }
 

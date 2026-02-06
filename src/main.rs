@@ -150,41 +150,35 @@ fn parse_position_command(tokens: &[&str]) -> (String, Vec<String>) {
 
 /// Parse the "go" command and return the time to move in seconds
 fn parse_go_command(tokens: &[&str], board: &Board) -> f64 {
-    let mut time_to_move = 1.0; // Default time
+    // Helper to find a value after a named token
+    let find_value = |name: &str| -> Option<i64> {
+        tokens
+            .iter()
+            .position(|&t| t == name)
+            .and_then(|i| tokens.get(i + 1))
+            .and_then(|s| s.parse().ok())
+    };
 
-    // Parse time controls: go wtime X btime Y winc Z binc W
-    if tokens.len() >= 9
-        && tokens.get(1) == Some(&"wtime")
-        && tokens.get(3) == Some(&"btime")
-        && tokens.get(5) == Some(&"winc")
-        && tokens.get(7) == Some(&"binc")
-    {
-        let wtime: i64 = tokens.get(2).and_then(|s| s.parse().ok()).unwrap_or(60000);
-        let btime: i64 = tokens.get(4).and_then(|s| s.parse().ok()).unwrap_or(60000);
-        let winc: i64 = tokens.get(6).and_then(|s| s.parse().ok()).unwrap_or(0);
-        let binc: i64 = tokens.get(8).and_then(|s| s.parse().ok()).unwrap_or(0);
-
-        // Calculate time to move: (remaining_time + increment) / 60
-        // This gives us roughly 1/60th of our time bank per move
-        time_to_move = if board.side_to_move() == Color::White {
-            (wtime + winc) as f64 / 60000.0
-        } else {
-            (btime + binc) as f64 / 60000.0
-        };
+    // go movetime X (time in milliseconds) — takes priority
+    if let Some(time_ms) = find_value("movetime") {
+        return time_ms as f64 / 1000.0;
     }
 
-    // Also handle simpler formats
-    // go movetime X (time in milliseconds)
-    if let Some(idx) = tokens.iter().position(|&t| t == "movetime") {
-        if let Some(time_ms) = tokens.get(idx + 1).and_then(|s| s.parse::<i64>().ok()) {
-            time_to_move = time_ms as f64 / 1000.0;
-        }
+    // Parse time controls: go wtime X btime Y [winc Z] [binc W]
+    let (remaining, inc) = if board.side_to_move() == Color::White {
+        (find_value("wtime"), find_value("winc"))
+    } else {
+        (find_value("btime"), find_value("binc"))
+    };
+
+    if let Some(remaining_ms) = remaining {
+        let inc_ms = inc.unwrap_or(0);
+        // Allocate roughly 1/30th of remaining time + increment
+        return (remaining_ms as f64 / 30000.0) + (inc_ms as f64 / 1000.0);
     }
 
-    // go depth X (fixed depth, we'll just use a reasonable time)
-    // For now, we don't implement depth-limited search differently
-
-    time_to_move
+    // Default fallback
+    1.0
 }
 
 #[cfg(test)]
@@ -234,7 +228,7 @@ mod tests {
             "go", "wtime", "300000", "btime", "300000", "winc", "3000", "binc", "3000",
         ];
         let time = parse_go_command(&tokens, &board);
-        // (300000 + 3000) / 60000 = 5.05
-        assert!((time - 5.05).abs() < 0.01);
+        // 300000 / 30000 + 3000 / 1000 = 10 + 3 = 13
+        assert!((time - 13.0).abs() < 0.01);
     }
 }

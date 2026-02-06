@@ -1,0 +1,18 @@
+[package]
+name = "xewali_chess_rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Himangshu Saikia"]
+description = "Xewali Chess Engine - Rust implementation"
+
+[[bin]]
+name = "xewali_engine"
+path = "src/main.rs"
+
+[dependencies]
+chess = "3.2"
+rand = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = true

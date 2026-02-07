@@ -12,9 +12,6 @@ use std::io::{self, BufRead, Write};
 /// The starting position FEN
 const START_POSITION: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
-/// Maximum time per move in seconds
-const MAX_TIME_PER_MOVE: f64 = 5.0;
-
 fn main() {
     uci_main();
 }
@@ -66,7 +63,6 @@ fn uci_main() {
 
             "go" => {
                 let time_to_move = parse_go_command(&tokens, &board);
-                let time_to_move = time_to_move.min(MAX_TIME_PER_MOVE);
 
                 println!("info Thinking...");
                 let _ = stdout.flush();

@@ -18,7 +18,7 @@ fn main() {
 
 fn uci_main() {
     // Load the opening book
-    let book = book::load_games("./engines/uci_games.txt");
+    let book = book::load_games("./book/uci_games.txt");
 
     let mut board = Board::default();
     let mut position_history: Vec<u64> = vec![board.get_hash()];

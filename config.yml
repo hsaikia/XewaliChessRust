@@ -10,14 +10,18 @@ challenge:
   concurrency: 1
   accept_bot: false
   only_bot: false
-  max_base: 900
-  min_base: 600
-  max_increment: 30
-  min_increment: 10
+  max_base: 10800
+  min_base: 30
+  max_increment: 180
+  min_increment: 0
   variants:
     - standard
+    - chess960
   time_controls:
+    - bullet
+    - blitz
     - rapid
+    - classical
   modes:
     - casual
     - rated

@@ -15,9 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 RUN git clone --depth 1 https://github.com/lichess-bot-devs/lichess-bot.git /app \
     && pip install --no-cache-dir -r requirements.txt
 
-RUN mkdir -p engines
+RUN mkdir -p engines book
 COPY --from=builder /build/target/release/xewali_engine engines/
 RUN chmod +x engines/xewali_engine
+COPY book/uci_games.txt book/
 
 # Smoke test: verify engine responds to UCI
 RUN echo "uci" | engines/xewali_engine | head -1 | grep -q "id name"

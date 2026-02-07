@@ -73,7 +73,7 @@ docker compose up -d
 | Restart | `docker compose restart` |
 | Update to latest image | `docker compose pull && docker compose up -d` |
 
-The `restart: unless-stopped` policy ensures the bot automatically restarts after crashes or VPS reboots. The container is limited to 256MB RAM and 1 CPU core.
+The `restart: unless-stopped` policy ensures the bot automatically restarts after crashes or VPS reboots.
 
 ## Configuration
 
@@ -82,11 +82,16 @@ Edit `config.yml` to adjust bot behavior. Key settings:
 | Setting | Default | Description |
 |---|---|---|
 | `challenge.concurrency` | `1` | Number of simultaneous games |
-| `challenge.time_controls` | blitz, rapid | Accepted time controls |
+| `challenge.time_controls` | bullet, blitz, rapid, classical | Accepted time controls |
+| `challenge.variants` | standard, chess960 | Accepted variants |
 | `challenge.modes` | casual, rated | Accepted game modes |
 | `challenge.accept_bot` | `false` | Accept challenges from other bots |
-| `challenge.min_base` | `600` | Minimum initial time (seconds) |
+| `challenge.min_base` | `30` | Minimum initial time (seconds) |
 | `challenge.max_base` | `10800` | Maximum initial time (seconds) |
+| `challenge.min_increment` | `0` | Minimum increment (seconds) |
+| `challenge.max_increment` | `180` | Maximum increment (seconds) |
+
+The engine dynamically allocates thinking time based on the remaining clock and increment, so it adapts to any time control from bullet to classical.
 
 After editing `config.yml`, push to `main` and redeploy:
 

@@ -14,9 +14,11 @@ A Rust port of the [XewaliChess](https://github.com/hsaikia/XewaliChess) engine,
 
 - **Iterative Deepening** - Progressively searches at increasing depths (1, 2, 3, ...) until the time limit is reached. This provides an anytime search capability and improves move ordering across iterations.
 - **Minimax with Alpha-Beta Pruning** - The core search algorithm. Alpha-beta pruning eliminates branches that cannot influence the final decision, reducing the effective branching factor from O(b^d) toward O(b^(d/2)).
-- **Quiescence Search** - At leaf nodes (depth 0), the engine continues searching capture sequences to avoid the horizon effect. Implements recapture logic where only moves to the same square are considered after a capture.
+- **Quiescence Search** - At leaf nodes (depth 0), the engine continues searching capture sequences to avoid the horizon effect, with a configurable depth limit.
 - **Transposition Table** - A hash map keyed by Zobrist hash stores previously evaluated positions. Cached evaluations are reused when the stored depth is sufficient, avoiding redundant computation.
-- **Move Ordering** - Child moves are sorted by their evaluation score to maximize alpha-beta cutoffs.
+- **Repetition Detection** - Tracks position history across the game and within the search tree. Positions that would lead to repetition are evaluated as draws, preventing the engine from falling into threefold repetition.
+- **Move Ordering** - Root moves are sorted by their evaluation score from the previous iteration to maximize alpha-beta cutoffs.
+- **Dynamic Time Management** - Allocates thinking time based on remaining clock and increment, adapting to any time control from bullet to classical.
 
 ### Evaluation
 
@@ -59,6 +61,10 @@ id name Xewali 1.0
 id author Himangshu Saikia
 uciok
 ```
+
+## Deployment
+
+The engine can be deployed as a 24/7 Lichess bot using Docker. See [DEPLOY.md](DEPLOY.md) for instructions. The bot accepts all standard time controls (bullet, blitz, rapid, classical) and chess960.
 
 ## License
 

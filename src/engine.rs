@@ -314,7 +314,8 @@ fn search(
 
         // Late Move Reductions
         let mut score;
-        let do_lmr = i >= 4 && depth >= 3 && !capture && !in_check && !is_promotion;
+        let gives_check = *new_board.checkers() != EMPTY;
+        let do_lmr = i >= 4 && depth >= 3 && !capture && !in_check && !is_promotion && !gives_check;
 
         if do_lmr {
             // Reduced depth search

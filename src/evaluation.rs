@@ -2,7 +2,7 @@
 // Rust port: 2024
 // email: himangshu.saikia.iitg@gmail.com
 
-use chess::{BitBoard, Board, BoardStatus, Color, Piece, Square};
+use chess::{BitBoard, Board, BoardStatus, Color, File, Piece, Rank, Square, EMPTY};
 
 /// Mate evaluation score
 pub const MATE_EVAL: f64 = 1e6;
@@ -388,8 +388,129 @@ pub fn eval(board: &Board) -> f64 {
         1.0 // No influence from either side
     };
 
-    // Final evaluation: material difference + mobility bonus
-    (white_material - black_material) as f64 + 10.0 * influence_ratio.ln()
+    // King safety (skipped in endgame)
+    let king_safety_score = if !is_endgame {
+        king_safety(board, Color::White, is_endgame) - king_safety(board, Color::Black, is_endgame)
+    } else {
+        0
+    };
+
+    // Final evaluation: material difference + mobility bonus + king safety
+    (white_material - black_material + king_safety_score) as f64 + 10.0 * influence_ratio.ln()
+}
+
+/// Build a bitboard mask for all squares on a given file.
+fn file_mask(file: File) -> BitBoard {
+    let mut bb = EMPTY;
+    for rank_idx in 0..8 {
+        bb |= BitBoard::set(Rank::from_index(rank_idx), file);
+    }
+    bb
+}
+
+/// Evaluate king safety for one side. Returns a score in centipawns (positive = safer).
+/// In the endgame this returns 0, since king centralization matters more than shelter.
+///
+/// Components:
+///   - Pawn shield: bonus for friendly pawns on the 2nd/3rd rank near the king
+///   - Open files: penalty for missing pawns on files near the king
+///   - Enemy attacks: penalty for enemy pieces attacking squares around the king
+fn king_safety(board: &Board, color: Color, is_endgame: bool) -> i32 {
+    if is_endgame {
+        return 0;
+    }
+
+    let king_sq = board.king_square(color);
+    let king_file = king_sq.get_file().to_index() as i32;
+    let enemy = if color == Color::White {
+        Color::Black
+    } else {
+        Color::White
+    };
+
+    let our_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(color);
+    let their_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(enemy);
+
+    let mut score: i32 = 0;
+
+    // --- Pawn shield & open file penalties ---
+    // Examine the king file and its neighbors (up to 3 files)
+    let file_start = (king_file - 1).max(0);
+    let file_end = (king_file + 1).min(7);
+
+    for f in file_start..=file_end {
+        let fmask = file_mask(File::from_index(f as usize));
+        let friendly_on_file = our_pawns & fmask;
+        let enemy_on_file = their_pawns & fmask;
+
+        if friendly_on_file == EMPTY {
+            // No friendly pawn on this file — king is exposed
+            score -= 15;
+            if enemy_on_file == EMPTY {
+                // Fully open file next to king
+                score -= 10;
+            }
+        } else {
+            // Bonus for pawn shield proximity to king
+            // Check rank 2 and 3 relative to the king's color
+            let (shield_rank_1, shield_rank_2) = if color == Color::White {
+                (Rank::from_index(1), Rank::from_index(2)) // ranks 2 and 3
+            } else {
+                (Rank::from_index(6), Rank::from_index(5)) // ranks 7 and 6
+            };
+            let r1_mask = BitBoard::set(shield_rank_1, File::from_index(f as usize));
+            let r2_mask = BitBoard::set(shield_rank_2, File::from_index(f as usize));
+
+            if friendly_on_file & r1_mask != EMPTY {
+                score += 10; // pawn on home rank shielding king
+            } else if friendly_on_file & r2_mask != EMPTY {
+                score += 5; // pawn advanced one rank, still decent cover
+            }
+        }
+    }
+
+    // --- Enemy piece attacks into king zone ---
+    let king_zone = chess::get_king_moves(king_sq) | BitBoard::from_square(king_sq);
+    let occupied = *board.combined();
+
+    // Knights
+    let enemy_knights = *board.pieces(Piece::Knight) & *board.color_combined(enemy);
+    for sq in enemy_knights {
+        let attacks = chess::get_knight_moves(sq) & king_zone;
+        if attacks != EMPTY {
+            score -= 10;
+        }
+    }
+
+    // Bishops
+    let enemy_bishops = *board.pieces(Piece::Bishop) & *board.color_combined(enemy);
+    for sq in enemy_bishops {
+        let attacks = chess::get_bishop_moves(sq, occupied) & king_zone;
+        if attacks != EMPTY {
+            score -= 10;
+        }
+    }
+
+    // Rooks
+    let enemy_rooks = *board.pieces(Piece::Rook) & *board.color_combined(enemy);
+    for sq in enemy_rooks {
+        let attacks = chess::get_rook_moves(sq, occupied) & king_zone;
+        if attacks != EMPTY {
+            score -= 15;
+        }
+    }
+
+    // Queens
+    let enemy_queens = *board.pieces(Piece::Queen) & *board.color_combined(enemy);
+    for sq in enemy_queens {
+        let attacks = (chess::get_bishop_moves(sq, occupied) | chess::get_rook_moves(sq, occupied))
+            & king_zone;
+        if attacks != EMPTY {
+            score -= 25;
+        }
+    }
+
+    score
 }
 
 /// Calculate mobility (number of attacked squares) for a color

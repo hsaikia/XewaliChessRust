@@ -12,6 +12,9 @@ use crate::evaluation::{eval, MATE_EVAL};
 /// Maximum number of entries in the transposition table to cap memory usage.
 const MAX_TT_ENTRIES: usize = 1_000_000;
 
+/// Maximum depth for quiescence search to prevent infinite capture chains.
+const MAX_QUIESCENCE_DEPTH: i32 = 8;
+
 /// Transposition table entry
 #[derive(Clone)]
 struct TTEntry {
@@ -24,12 +27,14 @@ struct SearchState {
     transposition_table: HashMap<u64, TTEntry>,
     start: Instant,
     time_limit: Duration,
+    nodes: u64,
     stopped: bool,
 }
 
 impl SearchState {
     fn check_time(&mut self) {
-        if self.start.elapsed() > self.time_limit {
+        self.nodes += 1;
+        if self.nodes & 4095 == 0 && self.start.elapsed() > self.time_limit {
             self.stopped = true;
         }
     }
@@ -53,12 +58,27 @@ fn is_capture(board: &Board, mv: ChessMove) -> bool {
 }
 
 /// Quiescence search: only evaluate captures to avoid horizon effect
-fn quiescence(board: &Board, mut alpha: f64, beta: f64, state: &mut SearchState) -> f64 {
+fn quiescence(
+    board: &Board,
+    mut alpha: f64,
+    beta: f64,
+    qs_depth: i32,
+    state: &mut SearchState,
+) -> f64 {
+    if state.stopped {
+        return 0.0;
+    }
+    state.check_time();
     if state.stopped {
         return 0.0;
     }
 
     let stand_pat = eval(board);
+
+    if qs_depth >= MAX_QUIESCENCE_DEPTH {
+        return stand_pat;
+    }
+
     let white_to_move = board.side_to_move() == Color::White;
 
     if white_to_move {
@@ -75,7 +95,7 @@ fn quiescence(board: &Board, mut alpha: f64, beta: f64, state: &mut SearchState)
                 continue;
             }
             let new_board = board.make_move_new(mv);
-            let score = quiescence(&new_board, alpha, beta, state);
+            let score = quiescence(&new_board, alpha, beta, qs_depth + 1, state);
             if state.stopped {
                 return 0.0;
             }
@@ -102,7 +122,7 @@ fn quiescence(board: &Board, mut alpha: f64, beta: f64, state: &mut SearchState)
                 continue;
             }
             let new_board = board.make_move_new(mv);
-            let score = quiescence(&new_board, alpha, beta, state);
+            let score = quiescence(&new_board, alpha, beta, qs_depth + 1, state);
             if state.stopped {
                 return 0.0;
             }
@@ -124,19 +144,13 @@ fn search(
     mut beta: f64,
     depth: i32,
     state: &mut SearchState,
-    nodes: &mut u64,
 ) -> f64 {
     if state.stopped {
         return 0.0;
     }
-
-    *nodes += 1;
-    // Check time every 4096 nodes
-    if *nodes & 4095 == 0 {
-        state.check_time();
-        if state.stopped {
-            return 0.0;
-        }
+    state.check_time();
+    if state.stopped {
+        return 0.0;
     }
 
     let key = board.get_hash();
@@ -150,7 +164,7 @@ fn search(
 
     // At depth 0, enter quiescence search
     if depth <= 0 {
-        return quiescence(board, alpha, beta, state);
+        return quiescence(board, alpha, beta, 0, state);
     }
 
     let white_to_move = board.side_to_move() == Color::White;
@@ -170,7 +184,7 @@ fn search(
 
     for mv in &moves {
         let new_board = board.make_move_new(*mv);
-        let score = search(&new_board, alpha, beta, depth - 1, state, nodes);
+        let score = search(&new_board, alpha, beta, depth - 1, state);
 
         if state.stopped {
             return 0.0;
@@ -244,23 +258,27 @@ pub fn play_move(board: &Board, book: &Book, time_to_move: f64) -> (String, f64)
         transposition_table: HashMap::new(),
         start,
         time_limit,
+        nodes: 0,
         stopped: false,
     };
 
     for depth in 1.. {
-        let mut alpha = f64::NEG_INFINITY;
-        let mut beta = f64::INFINITY;
         let mut depth_best_move = moves[0].0;
         let mut depth_best_eval = if white_to_move {
             f64::NEG_INFINITY
         } else {
             f64::INFINITY
         };
-        let mut nodes: u64 = 0;
 
         for (mv, mv_eval) in &mut moves {
             let new_board = board.make_move_new(*mv);
-            let score = search(&new_board, alpha, beta, depth - 1, &mut state, &mut nodes);
+            let score = search(
+                &new_board,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+                depth - 1,
+                &mut state,
+            );
 
             if state.stopped {
                 break;
@@ -273,13 +291,11 @@ pub fn play_move(board: &Board, book: &Book, time_to_move: f64) -> (String, f64)
                     depth_best_eval = score;
                     depth_best_move = *mv;
                 }
-                alpha = alpha.max(score);
             } else {
                 if score < depth_best_eval {
                     depth_best_eval = score;
                     depth_best_move = *mv;
                 }
-                beta = beta.min(score);
             }
         }
 

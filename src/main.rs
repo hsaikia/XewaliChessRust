@@ -21,6 +21,7 @@ fn uci_main() {
     let book = book::load_games("./engines/uci_games.txt");
 
     let mut board = Board::default();
+    let mut position_history: Vec<u64> = vec![board.get_hash()];
     let mut current_evaluation = 0.0;
 
     let stdin = io::stdin();
@@ -47,8 +48,8 @@ fn uci_main() {
             }
 
             "ucinewgame" => {
-                // Reset state - nothing special needed
                 board = Board::default();
+                position_history = vec![board.get_hash()];
             }
 
             "isready" => {
@@ -58,7 +59,9 @@ fn uci_main() {
 
             "position" => {
                 let (fen, moves) = parse_position_command(&tokens);
-                board = engine::set_position(&fen, &moves);
+                let result = engine::set_position(&fen, &moves);
+                board = result.0;
+                position_history = result.1;
             }
 
             "go" => {
@@ -67,7 +70,8 @@ fn uci_main() {
                 println!("info Thinking...");
                 let _ = stdout.flush();
 
-                let (best_move, eval) = engine::play_move(&board, &book, time_to_move);
+                let (best_move, eval) =
+                    engine::play_move(&board, &book, time_to_move, &position_history);
                 current_evaluation = eval;
 
                 println!("bestmove {}", best_move);

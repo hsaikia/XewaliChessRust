@@ -25,6 +25,7 @@ struct TTEntry {
 /// Shared search state passed through recursion
 struct SearchState {
     transposition_table: HashMap<u64, TTEntry>,
+    position_history: Vec<u64>,
     start: Instant,
     time_limit: Duration,
     nodes: u64,
@@ -155,6 +156,11 @@ fn search(
 
     let key = board.get_hash();
 
+    // Repetition detection: if this position appeared before, treat as draw
+    if state.position_history.iter().filter(|&&h| h == key).count() >= 1 {
+        return 0.0;
+    }
+
     // Check transposition table
     if let Some(entry) = state.transposition_table.get(&key) {
         if entry.depth >= depth {
@@ -184,7 +190,9 @@ fn search(
 
     for mv in &moves {
         let new_board = board.make_move_new(*mv);
+        state.position_history.push(key);
         let score = search(&new_board, alpha, beta, depth - 1, state);
+        state.position_history.pop();
 
         if state.stopped {
             return 0.0;
@@ -219,7 +227,7 @@ fn search(
 
 /// Play the best move for the current position
 /// Returns the best move in UCI format and the evaluation
-pub fn play_move(board: &Board, book: &Book, time_to_move: f64) -> (String, f64) {
+pub fn play_move(board: &Board, book: &Book, time_to_move: f64, history: &[u64]) -> (String, f64) {
     // Try to find a random move from the book
     let pos_key = board.get_hash();
 
@@ -256,6 +264,7 @@ pub fn play_move(board: &Board, book: &Book, time_to_move: f64) -> (String, f64)
     let mut best_eval = 0.0;
     let mut state = SearchState {
         transposition_table: HashMap::new(),
+        position_history: history.to_vec(),
         start,
         time_limit,
         nodes: 0,
@@ -324,22 +333,26 @@ pub fn play_move(board: &Board, book: &Book, time_to_move: f64) -> (String, f64)
 }
 
 /// Set up the position from a FEN string and list of moves
-pub fn set_position(fen: &str, moves: &[String]) -> Board {
+/// Returns the board and a history of position hashes (for repetition detection)
+pub fn set_position(fen: &str, moves: &[String]) -> (Board, Vec<u64>) {
     use std::str::FromStr;
 
     let mut board = Board::from_str(fen).unwrap_or_default();
+    let mut history = vec![board.get_hash()];
 
     for move_str in moves {
         if let Ok(mv) = ChessMove::from_str(move_str) {
             if MoveGen::new_legal(&board).any(|m| m == mv) {
                 board = board.make_move_new(mv);
+                history.push(board.get_hash());
             }
         } else if let Some(mv) = parse_uci_move(&board, move_str) {
             board = board.make_move_new(mv);
+            history.push(board.get_hash());
         }
     }
 
-    board
+    (board, history)
 }
 
 /// Parse a UCI format move string (e.g., "e2e4", "e7e8q")
@@ -404,16 +417,17 @@ mod tests {
 
     #[test]
     fn test_set_position_startpos() {
-        let board = set_position(
+        let (board, history) = set_position(
             "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
             &[],
         );
         assert_eq!(board, Board::default());
+        assert_eq!(history.len(), 1);
     }
 
     #[test]
     fn test_set_position_with_moves() {
-        let board = set_position(
+        let (board, history) = set_position(
             "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
             &["e2e4".to_string(), "e7e5".to_string()],
         );
@@ -421,13 +435,15 @@ mod tests {
             Board::from_str("rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2")
                 .unwrap();
         assert_eq!(board, expected);
+        assert_eq!(history.len(), 3);
     }
 
     #[test]
     fn test_play_move_starting() {
         let board = Board::default();
         let book = Book::new();
-        let (mv, _eval) = play_move(&board, &book, 0.5);
+        let history = vec![board.get_hash()];
+        let (mv, _eval) = play_move(&board, &book, 0.5, &history);
         assert!(!mv.is_empty(), "Should find a move");
     }
 }

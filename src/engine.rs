@@ -2,7 +2,7 @@
 // Rust port: 2024
 // email: himangshu.saikia.iitg@gmail.com
 
-use chess::{Board, ChessMove, Color, MoveGen, Piece};
+use chess::{Board, ChessMove, Color, MoveGen, Piece, EMPTY};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -15,11 +15,24 @@ const MAX_TT_ENTRIES: usize = 1_000_000;
 /// Maximum depth for quiescence search to prevent infinite capture chains.
 const MAX_QUIESCENCE_DEPTH: i32 = 8;
 
+/// Null-move pruning reduction
+const NULL_MOVE_R: i32 = 2;
+
+/// Transposition table bound type
+#[derive(Clone, Copy, PartialEq)]
+enum TTFlag {
+    Exact,
+    LowerBound,
+    UpperBound,
+}
+
 /// Transposition table entry
 #[derive(Clone)]
 struct TTEntry {
     depth: i32,
     eval: f64,
+    flag: TTFlag,
+    best_move: Option<ChessMove>,
 }
 
 /// Shared search state passed through recursion
@@ -138,12 +151,66 @@ fn quiescence(
     }
 }
 
-/// Minimax search with alpha-beta pruning (stack-based, no tree allocation)
+/// Get the material value of a piece for move ordering
+fn piece_order_value(piece: Piece) -> i32 {
+    match piece {
+        Piece::Pawn => 100,
+        Piece::Knight => 320,
+        Piece::Bishop => 330,
+        Piece::Rook => 500,
+        Piece::Queen => 900,
+        Piece::King => 20000,
+    }
+}
+
+/// Score a move for ordering. Higher scores are searched first.
+fn score_move(board: &Board, mv: ChessMove, tt_move: Option<ChessMove>) -> i32 {
+    // TT best move gets highest priority
+    if tt_move == Some(mv) {
+        return 100_000;
+    }
+
+    let mut score = 0;
+
+    // Promotions
+    if let Some(promo) = mv.get_promotion() {
+        score += 9000 + piece_order_value(promo);
+    }
+
+    // Captures scored by MVV-LVA
+    if let Some(victim) = board.piece_on(mv.get_dest()) {
+        let attacker = board.piece_on(mv.get_source()).unwrap_or(Piece::Pawn);
+        score += piece_order_value(victim) * 10 - piece_order_value(attacker);
+    } else if let Some(ep_sq) = board.en_passant() {
+        if mv.get_dest() == ep_sq {
+            if let Some(piece) = board.piece_on(mv.get_source()) {
+                if piece == Piece::Pawn {
+                    score += 100 * 10 - 100; // pawn captures pawn
+                }
+            }
+        }
+    }
+
+    score
+}
+
+/// Check if a side has non-pawn material (used for null-move pruning safety)
+fn has_non_pawn_material(board: &Board, color: Color) -> bool {
+    let our_pieces = *board.color_combined(color);
+    let knights = *board.pieces(Piece::Knight) & our_pieces;
+    let bishops = *board.pieces(Piece::Bishop) & our_pieces;
+    let rooks = *board.pieces(Piece::Rook) & our_pieces;
+    let queens = *board.pieces(Piece::Queen) & our_pieces;
+    (knights | bishops | rooks | queens) != EMPTY
+}
+
+/// Negamax search with alpha-beta pruning, null-move pruning, and LMR
 fn search(
     board: &Board,
     mut alpha: f64,
     mut beta: f64,
     depth: i32,
+    allow_null: bool,
     state: &mut SearchState,
 ) -> f64 {
     if state.stopped {
@@ -156,15 +223,29 @@ fn search(
 
     let key = board.get_hash();
 
-    // Repetition detection: if this position appeared before, treat as draw
-    if state.position_history.iter().filter(|&&h| h == key).count() >= 1 {
+    // Repetition detection: need position to appear 2+ times in history for 3-fold
+    if state.position_history.iter().filter(|&&h| h == key).count() >= 2 {
         return 0.0;
     }
 
-    // Check transposition table
+    // Probe transposition table
+    let mut tt_move: Option<ChessMove> = None;
     if let Some(entry) = state.transposition_table.get(&key) {
+        tt_move = entry.best_move;
         if entry.depth >= depth {
-            return entry.eval;
+            match entry.flag {
+                TTFlag::Exact => return entry.eval,
+                TTFlag::LowerBound => {
+                    if entry.eval >= beta {
+                        return entry.eval;
+                    }
+                }
+                TTFlag::UpperBound => {
+                    if entry.eval <= alpha {
+                        return entry.eval;
+                    }
+                }
+            }
         }
     }
 
@@ -174,24 +255,87 @@ fn search(
     }
 
     let white_to_move = board.side_to_move() == Color::White;
+    let in_check = *board.checkers() != EMPTY;
+
+    // Null-move pruning
+    if allow_null && !in_check && depth >= 3 && has_non_pawn_material(board, board.side_to_move()) {
+        if let Some(null_board) = board.null_move() {
+            let null_score = search(
+                &null_board,
+                alpha,
+                beta,
+                depth - 1 - NULL_MOVE_R,
+                false,
+                state,
+            );
+            if state.stopped {
+                return 0.0;
+            }
+            // Beta cutoff: if even passing gives a score >= beta, this position is too good
+            if white_to_move && null_score >= beta {
+                return beta;
+            }
+            if !white_to_move && null_score <= alpha {
+                return alpha;
+            }
+        }
+    }
+
     let movegen = MoveGen::new_legal(board);
-    let moves: Vec<ChessMove> = movegen.collect();
+    let mut moves: Vec<ChessMove> = movegen.collect();
 
     // No legal moves: checkmate or stalemate
     if moves.is_empty() {
         return eval(board);
     }
 
+    // Move ordering: score and sort moves
+    let mut scored_moves: Vec<(ChessMove, i32)> = moves
+        .iter()
+        .map(|&mv| (mv, score_move(board, mv, tt_move)))
+        .collect();
+    scored_moves.sort_by(|a, b| b.1.cmp(&a.1));
+    moves = scored_moves.into_iter().map(|(mv, _)| mv).collect();
+
+    let original_alpha = alpha;
+    let original_beta = beta;
     let mut best_eval = if white_to_move {
         f64::NEG_INFINITY
     } else {
         f64::INFINITY
     };
+    let mut best_move = moves[0];
 
-    for mv in &moves {
+    for (i, mv) in moves.iter().enumerate() {
+        let capture = is_capture(board, *mv);
+        let is_promotion = mv.get_promotion().is_some();
         let new_board = board.make_move_new(*mv);
         state.position_history.push(key);
-        let score = search(&new_board, alpha, beta, depth - 1, state);
+
+        // Late Move Reductions
+        let mut score;
+        let do_lmr = i >= 4 && depth >= 3 && !capture && !in_check && !is_promotion;
+
+        if do_lmr {
+            // Reduced depth search
+            score = search(&new_board, alpha, beta, depth - 2, true, state);
+            if state.stopped {
+                state.position_history.pop();
+                return 0.0;
+            }
+            // Re-search at full depth if reduced search improves alpha
+            let needs_research = if white_to_move {
+                score > alpha
+            } else {
+                score < beta
+            };
+            if needs_research {
+                score = search(&new_board, alpha, beta, depth - 1, true, state);
+            }
+        } else {
+            score = search(&new_board, alpha, beta, depth - 1, true, state);
+        }
+
         state.position_history.pop();
 
         if state.stopped {
@@ -199,10 +343,16 @@ fn search(
         }
 
         if white_to_move {
-            best_eval = best_eval.max(score);
+            if score > best_eval {
+                best_eval = score;
+                best_move = *mv;
+            }
             alpha = alpha.max(score);
         } else {
-            best_eval = best_eval.min(score);
+            if score < best_eval {
+                best_eval = score;
+                best_move = *mv;
+            }
             beta = beta.min(score);
         }
 
@@ -211,6 +361,23 @@ fn search(
         }
     }
 
+    // Determine TT flag based on relationship to original alpha/beta window
+    let tt_flag = if white_to_move {
+        if best_eval <= original_alpha {
+            TTFlag::UpperBound
+        } else if best_eval >= original_beta {
+            TTFlag::LowerBound
+        } else {
+            TTFlag::Exact
+        }
+    } else if best_eval >= original_beta {
+        TTFlag::UpperBound
+    } else if best_eval <= original_alpha {
+        TTFlag::LowerBound
+    } else {
+        TTFlag::Exact
+    };
+
     // Store in transposition table
     if state.transposition_table.len() < MAX_TT_ENTRIES {
         state.transposition_table.insert(
@@ -218,6 +385,8 @@ fn search(
             TTEntry {
                 depth,
                 eval: best_eval,
+                flag: tt_flag,
+                best_move: Some(best_move),
             },
         );
     }
@@ -286,6 +455,7 @@ pub fn play_move(board: &Board, book: &Book, time_to_move: f64, history: &[u64])
                 f64::NEG_INFINITY,
                 f64::INFINITY,
                 depth - 1,
+                true,
                 &mut state,
             );
 
@@ -300,11 +470,9 @@ pub fn play_move(board: &Board, book: &Book, time_to_move: f64, history: &[u64])
                     depth_best_eval = score;
                     depth_best_move = *mv;
                 }
-            } else {
-                if score < depth_best_eval {
-                    depth_best_eval = score;
-                    depth_best_move = *mv;
-                }
+            } else if score < depth_best_eval {
+                depth_best_eval = score;
+                depth_best_move = *mv;
             }
         }
 

@@ -16,7 +16,6 @@ challenge:
   min_increment: 0
   variants:
     - standard
-    - chess960
   time_controls:
     - bullet
     - blitz

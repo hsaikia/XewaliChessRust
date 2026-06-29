@@ -64,7 +64,7 @@ uciok
 
 ## Deployment
 
-The engine can be deployed as a 24/7 Lichess bot using Docker. See [DEPLOY.md](DEPLOY.md) for instructions. The bot accepts all standard time controls (bullet, blitz, rapid, classical) and chess960.
+The engine can be deployed as a 24/7 Lichess bot using Docker. See [DEPLOY.md](DEPLOY.md) for instructions. The bot accepts bullet, blitz, and rapid time controls.
 
 ## License
 

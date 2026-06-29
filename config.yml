@@ -20,7 +20,6 @@ challenge:
     - bullet
     - blitz
     - rapid
-    - classical
   modes:
     - casual
     - rated

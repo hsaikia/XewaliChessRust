@@ -1,0 +1,54 @@
+name: Run Lichess Bot
+
+on:
+  workflow_dispatch:
+    # Manually trigger to start the bot.
+    # The bot self-triggers before the 6-hour timeout to stay online continuously.
+    # If the chain breaks, just re-trigger manually.
+
+env:
+  REGISTRY: ghcr.io
+
+concurrency:
+  group: lichess-bot-run
+  cancel-in-progress: false
+  # Prevents duplicate runs. If a run is already active, new triggers queue up.
+  # Combined with the self-triggering handoff, only one bot instance runs at a time.
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # 6 hours — GitHub Actions hard limit
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase image name
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Pull latest image
+        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Run the bot
+        env:
+          LICHESS_BOT_TOKEN: ${{ secrets.LICHESS_BOT_TOKEN }}
+          SELF_TRIGGER_TOKEN: ${{ secrets.BOT_RUNNER_PAT }}
+          WORKFLOW_FILE: "run-bot.yml"
+          REPO: ${{ github.repository }}
+        run: |
+          docker run --rm \
+            -e LICHESS_BOT_TOKEN="$LICHESS_BOT_TOKEN" \
+            -e SELF_TRIGGER_TOKEN="$SELF_TRIGGER_TOKEN" \
+            -e WORKFLOW_FILE="$WORKFLOW_FILE" \
+            -e REPO="$REPO" \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest

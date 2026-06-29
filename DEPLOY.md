@@ -1,10 +1,10 @@
 # Deploying XewaliChess Bot on Lichess
 
-This guide covers deploying the Xewali chess engine as a 24/7 Lichess bot using Docker.
+This guide covers deploying the Xewali chess engine as a 24/7 Lichess bot using **GitHub Actions** (free for public repos).
 
 ## Prerequisites
 
-- A VPS with Docker and Docker Compose installed
+- A public GitHub repository with this code
 - A [Lichess BOT account](https://lichess.org/api#tag/Bot)
 
 ## 1. Get a Lichess API Token
@@ -21,9 +21,110 @@ This guide covers deploying the Xewali chess engine as a 24/7 Lichess bot using 
 >   -H "Authorization: Bearer YOUR_TOKEN"
 > ```
 
-## 2. Deploy on VPS
+## 2. Set Up GitHub Secrets
 
-The Docker image is built automatically by GitHub Actions on every push to `main` and published to GHCR. No compilation happens on the VPS.
+Go to your repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**.
+
+Add these two secrets:
+
+| Secret Name | Value | Purpose |
+|---|---|---|
+| `LICHESS_BOT_TOKEN` | `lip_xxxxxxxxxxxxxxxxxxxxxxxx` | Your Lichess API token so the bot can connect |
+| `BOT_RUNNER_PAT` | `github_pat_xxxxxxxxxxxxxxxxx` | A GitHub PAT that lets the bot re-trigger itself before the 6h timeout |
+
+### Creating the PAT (`BOT_RUNNER_PAT`)
+
+1. Go to https://github.com/settings/tokens?type=beta → **Generate new token** (Fine-grained)
+2. **Resource owner**: Your account
+3. **Repository access**: Only select repositories → choose `XewaliChessRust`
+4. **Permissions**: Under "Repository permissions", set **Actions** → **Read and write**
+5. Generate and copy the token — you'll only see it once
+
+> Why this is needed: GitHub Actions has a **6-hour hard limit** per job. The bot self-triggers a new workflow run before the timeout, creating a chain that keeps the bot online 24/7. A classic PAT with `workflow` scope also works.
+
+## 3. Start the Bot
+
+Go to your repo → **Actions** → **Run Lichess Bot** → **Run workflow** → **Run workflow**.
+
+The first run will:
+- Pull the pre-built Docker image from GHCR
+- Start the bot, which connects to Lichess
+
+After ~5h45m, the bot will automatically trigger the next run and exit. The new run picks up within ~30 seconds. This repeats indefinitely.
+
+## 4. Verify the Bot is Online
+
+1. Check the Actions tab — you should see a green "Run Lichess Bot" workflow running.
+2. Go to `https://lichess.org/@/YOUR_BOT_USERNAME` — it should show as online (green dot).
+3. Challenge it to a game to confirm it plays.
+
+To view live logs, open the running workflow and click on the `run-bot` job → expand "Run the bot".
+
+## 5. How It Works
+
+```mermaid
+graph LR
+    A[Manual trigger] --> B[Job runs bot for 5h45m]
+    B --> C[Self-triggers next run via API]
+    C --> D[Current job exits]
+    D --> E[New job starts ~30s later]
+    E --> B
+```
+
+### Limitations
+
+| Issue | Impact |
+|---|---|
+| **Games interrupted at handoff** | Any game in progress when the 6h handoff occurs will be abandoned (bot resigns on timeout). This happens ~every 6 hours. |
+| **~30s offline gap** | During the handoff, the bot appears offline on Lichess. No challenges are accepted. |
+| **PAT expiry** | Fine-grained PATs can expire (you set the expiry when creating). If it expires, the chain breaks. Renew the PAT and manually re-trigger. |
+| **Chain breakage** | If the self-trigger fails (network issue, rate limit, etc.), the bot goes offline until manually re-triggered. |
+
+### If you need truly uninterrupted 24/7
+
+For zero-downtime operation without the 6h handoff, deploy on a free-tier cloud VM instead:
+
+- **Oracle Cloud** — Always Free tier includes an ARM VM (4 cores, 24 GB RAM)
+- **Google Cloud** — Free tier includes a micro VM
+- **fly.io** — Free tier includes 3 shared-cpu VMs
+
+For VPS deployment, see the [VPS Deployment section](#vps-deployment-alternative) below.
+
+## 6. Updating the Bot
+
+Push your changes to `main`. The `Build and Push Docker Image` workflow will build and push a new Docker image to GHCR.
+
+The running bot picks up the update automatically on the next handoff (within 6 hours). For immediate update, cancel the running workflow and manually trigger a new one.
+
+## Configuration
+
+Edit `config.yml` to adjust bot behavior. Key settings:
+
+| Setting | Default | Description |
+|---|---|---|
+| `challenge.concurrency` | `1` | Number of simultaneous games |
+| `challenge.time_controls` | bullet, blitz, rapid | Accepted time controls |
+| `challenge.variants` | standard | Accepted variants (add `chess960` for Chess960) |
+| `challenge.modes` | casual, rated | Accepted game modes |
+| `challenge.accept_bot` | `false` | Accept challenges from other bots |
+| `challenge.min_base` | `30` | Minimum initial time (seconds) |
+| `challenge.max_base` | `10800` | Maximum initial time (seconds) |
+| `challenge.min_increment` | `0` | Minimum increment (seconds) |
+| `challenge.max_increment` | `180` | Maximum increment (seconds) |
+
+See the [lichess-bot configuration docs](https://github.com/lichess-bot-devs/lichess-bot/wiki/Configure-lichess-bot) for the full list of options.
+
+---
+
+## VPS Deployment (Alternative)
+
+If you have a VPS, this is the preferred method — no 6h handoff, no game interruptions.
+
+### Prerequisites
+
+- A VPS with Docker and Docker Compose installed
+
+### Steps
 
 Clone the repo and configure:
 
@@ -52,18 +153,7 @@ Verify the bot is connected:
 docker compose logs -f
 ```
 
-You should see output indicating the bot has connected to Lichess and is waiting for challenges.
-
-## 3. Updating
-
-After pushing changes to `main`, GitHub Actions will build and push a new image. On your VPS:
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-## 4. Managing the Bot
+### Managing the Bot (VPS)
 
 | Action | Command |
 |---|---|
@@ -74,31 +164,3 @@ docker compose up -d
 | Update to latest image | `docker compose pull && docker compose up -d` |
 
 The `restart: unless-stopped` policy ensures the bot automatically restarts after crashes or VPS reboots.
-
-## Configuration
-
-Edit `config.yml` to adjust bot behavior. Key settings:
-
-| Setting | Default | Description |
-|---|---|---|
-| `challenge.concurrency` | `1` | Number of simultaneous games |
-| `challenge.time_controls` | bullet, blitz, rapid, classical | Accepted time controls |
-| `challenge.variants` | standard, chess960 | Accepted variants |
-| `challenge.modes` | casual, rated | Accepted game modes |
-| `challenge.accept_bot` | `false` | Accept challenges from other bots |
-| `challenge.min_base` | `30` | Minimum initial time (seconds) |
-| `challenge.max_base` | `10800` | Maximum initial time (seconds) |
-| `challenge.min_increment` | `0` | Minimum increment (seconds) |
-| `challenge.max_increment` | `180` | Maximum increment (seconds) |
-
-The engine dynamically allocates thinking time based on the remaining clock and increment, so it adapts to any time control from bullet to classical.
-
-After editing `config.yml`, push to `main` and redeploy:
-
-```bash
-git push
-# Wait for GitHub Actions to finish, then on VPS:
-docker compose pull && docker compose up -d
-```
-
-See the [lichess-bot configuration docs](https://github.com/lichess-bot-devs/lichess-bot/wiki/Configure-lichess-bot) for the full list of options.

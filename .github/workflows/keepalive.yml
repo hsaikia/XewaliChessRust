@@ -1,10 +1,11 @@
 name: Bot Keepalive Watchdog
 
 # Safety net: if the bot's self-trigger chain ever breaks (PAT expiry, API
-# failure, crash), this scheduled job detects that no bot run is active and
-# starts a fresh one within ~20 minutes. It is intentionally a separate
-# workflow — putting a schedule on run-bot.yml itself would queue a new 6h run
-# on every cron tick even while the bot is healthy.
+# failure, crash), this scheduled job starts a fresh run. It also catches the
+# case the run-status check alone cannot see — a run that is still "in progress"
+# while the bot inside it has silently dropped off Lichess. It is intentionally
+# a separate workflow: putting a schedule on run-bot.yml itself would queue a
+# new 6h run on every cron tick even while the bot is healthy.
 
 on:
   schedule:
@@ -18,6 +19,13 @@ concurrency:
   group: lichess-bot-keepalive
   cancel-in-progress: false
 
+env:
+  BOT_WORKFLOW: run-bot.yml
+  # A run whose bot has not shown up online on Lichess within this many seconds
+  # of starting is considered wedged and gets replaced. Must comfortably exceed
+  # image pull + bot startup time.
+  WEDGED_AFTER_SECONDS: 600
+
 jobs:
   keepalive:
     runs-on: ubuntu-latest
@@ -25,18 +33,82 @@ jobs:
       - name: Restart the bot if it is offline
         env:
           GH_TOKEN: ${{ secrets.BOT_RUNNER_PAT }}
+          GH_REPO: ${{ github.repository }}
+          LICHESS_BOT_TOKEN: ${{ secrets.LICHESS_BOT_TOKEN }}
         run: |
           set -euo pipefail
 
-          ACTIVE=$(gh run list \
-            --workflow run-bot.yml \
-            --status queued,in_progress,pending,waiting \
-            --json databaseId \
-            --jq 'length > 0')
-
-          if [ "$ACTIVE" = "true" ]; then
-            echo "Bot is alive (or a run is queued). Nothing to do."
-          else
-            echo "Bot appears offline. Dispatching a new run..."
-            gh workflow run run-bot.yml --ref main
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::BOT_RUNNER_PAT is empty or expired. The bot cannot restart itself until it is renewed."
+            exit 1
           fi
+
+          dispatch() {
+            echo "Dispatching a new ${BOT_WORKFLOW} run on ${GITHUB_REF_NAME}..."
+            gh workflow run "${BOT_WORKFLOW}" --ref "${GITHUB_REF_NAME}"
+          }
+
+          # `gh run list --status` accepts only one value, so fetch recent runs
+          # and filter locally. Anything not "completed" counts as alive.
+          active=$(gh api "repos/${GH_REPO}/actions/workflows/${BOT_WORKFLOW}/runs?per_page=30" \
+            --jq '[.workflow_runs[] | select(.status != "completed")]')
+
+          if [ "$(jq 'length' <<<"$active")" -eq 0 ]; then
+            echo "No active bot run found."
+            dispatch
+            exit 0
+          fi
+
+          jq -r '.[] | "Active run \(.id): \(.status) (started \(.run_started_at // .created_at))"' <<<"$active"
+
+          # A run exists — but is the bot actually reachable on Lichess?
+          if [ -z "${LICHESS_BOT_TOKEN:-}" ]; then
+            echo "LICHESS_BOT_TOKEN is not set; skipping the liveness check."
+            exit 0
+          fi
+
+          username=$(curl -fsS --max-time 30 --retry 3 --retry-all-errors \
+            -H "Authorization: Bearer ${LICHESS_BOT_TOKEN}" \
+            https://lichess.org/api/account | jq -r '.username // empty') || username=""
+
+          if [ -z "$username" ]; then
+            echo "::warning::Could not resolve the bot username from Lichess. Leaving the active run alone."
+            exit 0
+          fi
+
+          online=$(curl -fsS --max-time 30 --retry 3 --retry-all-errors \
+            "https://lichess.org/api/users/status?ids=${username}" \
+            | jq -r '.[0].online // false') || online="unknown"
+
+          if [ "$online" != "false" ]; then
+            echo "${username} is online (status: ${online}). Nothing to do."
+            exit 0
+          fi
+
+          # Offline. Only intervene if a run has been going long enough that it
+          # should have connected by now — otherwise it is still pulling the
+          # image or mid-handoff, and cancelling would cause needless churn.
+          wedged=$(jq -r --argjson now "$(date -u +%s)" --argjson max "${WEDGED_AFTER_SECONDS}" '
+            [ .[]
+              | select(.status == "in_progress")
+              | select(((.run_started_at // .created_at) | fromdateiso8601) < ($now - $max))
+              | .id
+            ] | first // empty' <<<"$active")
+
+          if [ -z "$wedged" ]; then
+            echo "${username} is offline, but the active run is younger than ${WEDGED_AFTER_SECONDS}s (starting up or handing off). Waiting."
+            exit 0
+          fi
+
+          echo "::warning::${username} is offline while run ${wedged} has been in progress for over ${WEDGED_AFTER_SECONDS}s. Replacing it."
+          gh run cancel "$wedged" || true
+
+          # Let the cancellation land first: the lichess-bot-run concurrency
+          # group would otherwise leave the replacement queued behind the
+          # zombie run.
+          for _ in $(seq 1 24); do
+            [ "$(gh run view "$wedged" --json status --jq .status)" = "completed" ] && break
+            sleep 5
+          done
+
+          dispatch

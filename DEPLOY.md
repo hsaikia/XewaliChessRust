@@ -52,7 +52,13 @@ The first run will:
 - Pull the pre-built Docker image from GHCR
 - Start the bot, which connects to Lichess
 
-After ~5h30m, the bot automatically triggers the next run and exits cleanly. The new run picks up within ~30 seconds. This repeats indefinitely. If the chain ever breaks (a failed handoff, a crash, or an expired PAT), the **Bot Keepalive Watchdog** — scheduled every 20 minutes — detects the outage and restarts the bot automatically.
+After ~5h30m, the bot automatically triggers the next run and exits cleanly. The new run picks up within ~30 seconds. This repeats indefinitely.
+
+Three layers keep it online:
+
+1. **In-container supervisor** — if `lichess-bot.py` crashes, `entrypoint.sh` restarts it within seconds (5s, backing off to 25s). Recovery is immediate rather than waiting on the watchdog. After 5 consecutive attempts that fail to stay up for a minute, it gives up on purpose so the job fails and layer 3 starts a fresh run on a freshly pulled image.
+2. **Self-trigger handoff** — the run dispatches its successor at 5h30m and retries until the API accepts it.
+3. **Keepalive watchdog** — a scheduled check every 20 minutes, described below.
 
 ## 4. Verify the Bot is Online
 
@@ -74,7 +80,16 @@ graph LR
     W[Keepalive watchdog] -.->|if no run is active| E
 ```
 
-**Keepalive watchdog** — `keepalive.yml` runs on a schedule every 20 minutes and checks whether a `run-bot.yml` run is active or queued. If not, it dispatches a new one. This automatically recovers from bot crashes, handoff failures, and expired PATs. It is a separate workflow on purpose: a `schedule` trigger on `run-bot.yml` itself would queue a new 6-hour run on every cron tick even while the bot is healthy.
+**Keepalive watchdog** — `keepalive.yml` runs on a schedule every 20 minutes and makes two checks:
+
+1. **Is a `run-bot.yml` run active?** If no run is queued or in progress, it dispatches one. This recovers from a broken handoff chain.
+2. **Is the bot actually online on Lichess?** A run can sit in `in_progress` while the bot inside it has silently dropped its event stream — the run-status check alone would not notice for up to 6 hours. So the watchdog resolves the bot's username via `/api/account` and checks `/api/users/status`. If the bot is offline while a run has been in progress for more than 10 minutes, that run is cancelled and replaced.
+
+The 10-minute grace period matters: it keeps the watchdog from cancelling a run that is merely pulling its image or mid-handoff. If Lichess is unreachable, the watchdog leaves the active run alone rather than acting on a missing answer.
+
+It is a separate workflow on purpose: a `schedule` trigger on `run-bot.yml` itself would queue a new 6-hour run on every cron tick even while the bot is healthy.
+
+> **Note:** GitHub disables scheduled workflows in public repos after **60 days without repository activity**. If you go two months without pushing a commit, the watchdog stops firing and you'll need to re-enable it from the Actions tab. The self-trigger chain is unaffected.
 
 ### Limitations
 
@@ -82,8 +97,10 @@ graph LR
 |---|---|
 | **Games interrupted at handoff** | Any game in progress when the 6h handoff occurs will be abandoned (bot resigns on timeout). This happens ~every 6 hours. |
 | **~30s offline gap** | During the handoff, the bot appears offline on Lichess. No challenges are accepted. |
-| **PAT expiry** | Fine-grained PATs can expire (you set the expiry when creating). If it expires, the chain breaks — and the watchdog can't help either, since it uses the same token. Renew the PAT and manually re-trigger. |
-| **Chain breakage** | The bot now retries the self-trigger until it succeeds. If the chain still breaks (e.g. PAT expiry), the keepalive watchdog restarts the bot within ~20 minutes. |
+| **PAT expiry** | Fine-grained PATs can expire (you set the expiry when creating). If it expires, the chain breaks — and the watchdog can't help either, since it uses the same token. The watchdog fails loudly with a clear error in this case. Renew the PAT and manually re-trigger. |
+| **Chain breakage** | The bot retries the self-trigger until it succeeds. If the chain still breaks, the keepalive watchdog restarts the bot within ~20 minutes. |
+| **Wedged bot** | Detected via the Lichess online check and replaced within ~20–30 minutes. |
+| **Cron drift** | GitHub's scheduled runs are best-effort and can be delayed under load, so "every 20 minutes" is a floor, not a guarantee. |
 
 ### If you need truly uninterrupted 24/7
 

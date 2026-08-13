@@ -37,7 +37,18 @@ jobs:
         run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       - name: Pull latest image
-        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        # Retry: a transient GHCR blip here would otherwise take the bot offline
+        # until the next watchdog tick.
+        run: |
+          for attempt in 1 2 3; do
+            if docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest; then
+              exit 0
+            fi
+            echo "Pull attempt $attempt failed; retrying in 15s..."
+            sleep 15
+          done
+          echo "::error::Could not pull the bot image after 3 attempts."
+          exit 1
 
       - name: Run the bot
         env:

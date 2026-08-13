@@ -41,6 +41,8 @@ Add these two secrets:
 5. Generate and copy the token — you'll only see it once
 
 > Why this is needed: GitHub Actions has a **6-hour hard limit** per job. The bot self-triggers a new workflow run before the timeout, creating a chain that keeps the bot online 24/7. A classic PAT with `workflow` scope also works.
+>
+> This same token powers the **Bot Keepalive Watchdog** (`keepalive.yml`), so keep it valid: set a long expiry or renew it before it lapses — an expired PAT is the most common way the bot goes offline.
 
 ## 3. Start the Bot
 
@@ -50,7 +52,7 @@ The first run will:
 - Pull the pre-built Docker image from GHCR
 - Start the bot, which connects to Lichess
 
-After ~5h45m, the bot will automatically trigger the next run and exit. The new run picks up within ~30 seconds. This repeats indefinitely.
+After ~5h30m, the bot automatically triggers the next run and exits cleanly. The new run picks up within ~30 seconds. This repeats indefinitely. If the chain ever breaks (a failed handoff, a crash, or an expired PAT), the **Bot Keepalive Watchdog** — scheduled every 20 minutes — detects the outage and restarts the bot automatically.
 
 ## 4. Verify the Bot is Online
 
@@ -64,12 +66,15 @@ To view live logs, open the running workflow and click on the `run-bot` job → 
 
 ```mermaid
 graph LR
-    A[Manual trigger] --> B[Job runs bot for 5h45m]
+    A[Manual trigger] --> B[Job runs bot for 5h30m]
     B --> C[Self-triggers next run via API]
     C --> D[Current job exits]
     D --> E[New job starts ~30s later]
     E --> B
+    W[Keepalive watchdog] -.->|if no run is active| E
 ```
+
+**Keepalive watchdog** — `keepalive.yml` runs on a schedule every 20 minutes and checks whether a `run-bot.yml` run is active or queued. If not, it dispatches a new one. This automatically recovers from bot crashes, handoff failures, and expired PATs. It is a separate workflow on purpose: a `schedule` trigger on `run-bot.yml` itself would queue a new 6-hour run on every cron tick even while the bot is healthy.
 
 ### Limitations
 
@@ -77,8 +82,8 @@ graph LR
 |---|---|
 | **Games interrupted at handoff** | Any game in progress when the 6h handoff occurs will be abandoned (bot resigns on timeout). This happens ~every 6 hours. |
 | **~30s offline gap** | During the handoff, the bot appears offline on Lichess. No challenges are accepted. |
-| **PAT expiry** | Fine-grained PATs can expire (you set the expiry when creating). If it expires, the chain breaks. Renew the PAT and manually re-trigger. |
-| **Chain breakage** | If the self-trigger fails (network issue, rate limit, etc.), the bot goes offline until manually re-triggered. |
+| **PAT expiry** | Fine-grained PATs can expire (you set the expiry when creating). If it expires, the chain breaks — and the watchdog can't help either, since it uses the same token. Renew the PAT and manually re-trigger. |
+| **Chain breakage** | The bot now retries the self-trigger until it succeeds. If the chain still breaks (e.g. PAT expiry), the keepalive watchdog restarts the bot within ~20 minutes. |
 
 ### If you need truly uninterrupted 24/7
 

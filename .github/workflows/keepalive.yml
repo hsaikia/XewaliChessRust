@@ -1,0 +1,42 @@
+name: Bot Keepalive Watchdog
+
+# Safety net: if the bot's self-trigger chain ever breaks (PAT expiry, API
+# failure, crash), this scheduled job detects that no bot run is active and
+# starts a fresh one within ~20 minutes. It is intentionally a separate
+# workflow — putting a schedule on run-bot.yml itself would queue a new 6h run
+# on every cron tick even while the bot is healthy.
+
+on:
+  schedule:
+    - cron: "*/20 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lichess-bot-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restart the bot if it is offline
+        env:
+          GH_TOKEN: ${{ secrets.BOT_RUNNER_PAT }}
+        run: |
+          set -euo pipefail
+
+          ACTIVE=$(gh run list \
+            --workflow run-bot.yml \
+            --status queued,in_progress,pending,waiting \
+            --json databaseId \
+            --jq 'length > 0')
+
+          if [ "$ACTIVE" = "true" ]; then
+            echo "Bot is alive (or a run is queued). Nothing to do."
+          else
+            echo "Bot appears offline. Dispatching a new run..."
+            gh workflow run run-bot.yml --ref main
+          fi
